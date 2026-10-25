@@ -11,11 +11,10 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📈 A股量化工作台")
-st.write("A股历史行情 · K线 · 六均线 · 成交量")
+st.title("📈 A股量化工作台 V3")
+st.write("A股历史行情 · K线 · 六均线 · 成交量 · 涨跌幅")
 
 
-# 股票代码转换
 def convert_a_share_code(code):
     code = code.strip().upper()
 
@@ -31,7 +30,6 @@ def convert_a_share_code(code):
     return code
 
 
-# 股票输入框
 stock_code = st.text_input(
     "请输入股票代码",
     value="600519",
@@ -59,11 +57,57 @@ if st.button("读取行情"):
                 st.warning("没有获取到数据，请检查股票代码。")
                 st.stop()
 
+            df = df.sort_index().reset_index()
+
+            if len(df) < 2:
+                st.warning("数据不足两个交易日，无法计算涨跌幅。")
+                st.stop()
+
             st.success("行情读取成功！")
 
-            df = df.reset_index()
+            # 最新收盘价和前一交易日收盘价
+            latest_close = float(df["Close"].iloc[-1])
+            previous_close = float(df["Close"].iloc[-2])
 
-            # 六条均线
+            change_amount = latest_close - previous_close
+
+            change_pct = (
+                change_amount / previous_close * 100
+                if previous_close != 0 else 0
+            )
+
+            latest_date = pd.to_datetime(
+                df["Date"].iloc[-1]
+            ).strftime("%Y-%m-%d")
+
+            # 顶部行情指标
+            st.subheader("📊 最新交易日行情")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.metric(
+                    label="最新收盘价（元）",
+                    value=f"{latest_close:,.2f}",
+                    delta=f"{change_amount:+.2f} 元",
+                    delta_color="off"
+                )
+
+            with col2:
+                st.metric(
+                    label="当日涨跌幅",
+                    value=f"{change_pct:+.2f}%",
+                    delta=f"{change_amount:+.2f} 元",
+                    delta_color="off"
+                )
+
+            st.caption(
+                f"数据日期：{latest_date} | "
+                "涨跌幅相对上一交易日收盘价计算，"
+                "并非实时行情。"
+            )
+
+            # 六条自定义均线
             ma_periods = [6, 16, 26, 46, 62, 80]
 
             ma_colors = [
@@ -80,9 +124,8 @@ if st.button("读取行情"):
                     df["Close"].rolling(period).mean()
                 )
 
-            st.subheader(f"📊 {ticker_code} K线与成交量")
+            st.subheader(f"📈 {ticker_code} K线与成交量")
 
-            # 创建上下两个图表
             fig = make_subplots(
                 rows=2,
                 cols=1,
@@ -91,7 +134,7 @@ if st.button("读取行情"):
                 row_heights=[0.75, 0.25]
             )
 
-            # 第一层：K线
+            # K线
             fig.add_trace(
                 go.Candlestick(
                     x=df["Date"],
@@ -107,7 +150,7 @@ if st.button("读取行情"):
                 col=1
             )
 
-            # 第二层：六条均线
+            # 六条均线
             for period, color in zip(ma_periods, ma_colors):
                 fig.add_trace(
                     go.Scatter(
@@ -124,7 +167,7 @@ if st.button("读取行情"):
                     col=1
                 )
 
-            # 第三层：成交量柱状图
+            # 成交量柱状图
             volume_colors = [
                 "#EF4444" if close >= open_price
                 else "#22C55E"
@@ -145,7 +188,6 @@ if st.button("读取行情"):
                 col=1
             )
 
-            # 图表样式
             fig.update_layout(
                 title=f"{ticker_code} Price & Volume",
                 height=800,
@@ -189,7 +231,7 @@ if st.button("读取行情"):
                 use_container_width=True
             )
 
-            # 历史行情表
+            # 最近30个交易日数据
             st.subheader("最近30个交易日数据")
 
             show_columns = [
