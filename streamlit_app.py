@@ -431,7 +431,7 @@ if st.button(
                 period="5y",
                 interval="1d",
                 auto_adjust=True,
-                repair=True
+                repair=false
             )
 
             if df.empty:
