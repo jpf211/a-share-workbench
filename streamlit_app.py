@@ -1,5 +1,5 @@
 import streamlit as st
-import akshare as ak
+import yfinance as yf
 import pandas as pd
 
 st.set_page_config(
