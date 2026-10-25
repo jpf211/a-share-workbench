@@ -351,8 +351,8 @@ with st.sidebar:
 
     commission_bp = st.number_input(
         "佣金（单边，bp）",
-        min_value=0.0,
-        max_value=100.0,
+        min_value=10000.0,
+        max_value=100000.0,
         value=2.5,
         step=0.5,
         help=(
