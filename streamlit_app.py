@@ -17,25 +17,49 @@ stock_code = st.text_input(
     placeholder="例如：600519"
 )
 
+def convert_a_share_code(code):
+    code = code.strip().upper()
+
+    # 如果已经输入了 .SS 或 .SZ，就直接使用
+    if code.endswith(".SS") or code.endswith(".SZ"):
+        return code
+
+    # 沪市常见代码
+    if code.startswith(("5", "6", "9")):
+        return code + ".SS"
+
+    # 深市常见代码
+    if code.startswith(("0", "1", "2", "3")):
+        return code + ".SZ"
+
+    return code
+
 if st.button("读取行情"):
+
+    ticker_code = convert_a_share_code(stock_code)
+
+    st.write("正在查询：", ticker_code)
 
     with st.spinner("正在读取行情数据..."):
 
         try:
-            df = ak.stock_zh_a_hist(
-                symbol=stock_code,
-                period="daily",
-                start_date="20250101",
-                end_date="20261231",
-                adjust="qfq"
+            stock = yf.Ticker(ticker_code)
+
+            df = stock.history(
+                period="1y",
+                interval="1d",
+                auto_adjust=False
             )
 
             if df.empty:
                 st.warning("没有获取到数据，请检查股票代码。")
+
             else:
                 st.success("行情读取成功！")
 
-                st.subheader(f"股票代码：{stock_code}")
+                st.subheader(f"股票代码：{ticker_code}")
+
+                df = df.reset_index()
 
                 st.dataframe(
                     df.tail(30),
