@@ -244,8 +244,72 @@ if st.button("读取行情"):
                     row=1,
                     col=1
                 )
+            
+            # ===== V5 历史金叉与死叉标记 =====
 
-            # 成交量柱状图
+            ma6 = df["MA6"]
+            ma16 = df["MA16"]
+
+            # 金叉：前一天MA6不高于MA16，
+            # 今天MA6高于MA16
+            golden_cross = (
+                (ma6.shift(1) <= ma16.shift(1))
+                & (ma6 > ma16)
+            )
+
+            # 死叉：前一天MA6不低于MA16，
+            # 今天MA6低于MA16
+            death_cross = (
+                (ma6.shift(1) >= ma16.shift(1))
+                & (ma6 < ma16)
+            )
+
+            golden_df = df[golden_cross]
+            death_df = df[death_cross]
+
+            # 金叉标记在K线下方
+            fig.add_trace(
+                go.Scatter(
+                    x=golden_df["Date"],
+                    y=golden_df["Low"] * 0.985,
+                    mode="markers",
+                    name="Golden Cross",
+                    marker=dict(
+                        symbol="triangle-up",
+                        size=13,
+                        color="#EF4444"
+                    ),
+                    text=["金叉"] * len(golden_df),
+                    hovertemplate="%{x}<br>%{text}<extra></extra>"
+                ),
+                row=1,
+                col=1
+            )
+
+            # 死叉标记在K线上方
+            fig.add_trace(
+                go.Scatter(
+                    x=death_df["Date"],
+                    y=death_df["High"] * 1.015,
+                    mode="markers",
+                    name="Death Cross",
+                    marker=dict(
+                        symbol="triangle-down",
+                        size=13,
+                        color="#22C55E"
+                    ),
+                    text=["死叉"] * len(death_df),
+                    hovertemplate="%{x}<br>%{text}<extra></extra>"
+                ),
+                row=1,
+                col=1
+            )
+
+            st.write(
+                f"历史金叉次数：{len(golden_df)} | "
+                f"历史死叉次数：{len(death_df)}"
+            )
+           # 成交量柱状图
             volume_colors = [
                 "#EF4444" if close >= open_price
                 else "#22C55E"
