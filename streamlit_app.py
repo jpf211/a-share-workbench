@@ -78,250 +78,125 @@ def calculate_max_drawdown(equity):
 # MA6 / MA16 回测
 # =========================================================
 def run_backtest(
-    df,
-    years,
-    commission_rate,
-    stamp_duty_rate,
-    slippage_rate
+    df, years, commission_rate, stamp_duty_rate, slippage_rate,
+    initial_capital=100000.0, min_commission=5.0
 ):
-    bt = df.copy()
+    """无杠杆、按100股整手买入的简化A股日线回测。"""
+    if not (0 <= commission_rate < 0.01):
+        raise ValueError("佣金率异常：请检查佣金是否误填成初始资金。")
+    if not (0 <= stamp_duty_rate < 0.01 and 0 <= slippage_rate < 0.01):
+        raise ValueError("印花税或滑点参数异常。")
+    if initial_capital <= 0:
+        raise ValueError("初始资金必须大于0。")
 
-    # 最近 N 年作为正式回测区间
-    start_date = (
-        bt["Date"].max()
-        - pd.DateOffset(years=years)
-    )
+    bt = df.copy().sort_values("Date")
+    # 先在完整历史数据上计算好均线，再截取回测窗口（保留预热数据）
+    start_date = bt["Date"].max() - pd.DateOffset(years=years)
+    bt = bt.loc[bt["Date"] >= start_date].copy().reset_index(drop=True)
+    if len(bt) < 2:
+        raise ValueError("回测区间数据不足。")
+    for column in ["Open", "Close", "MA6", "MA16"]:
+        if column not in bt.columns:
+            raise ValueError(f"缺少行情字段：{column}")
+    if bt[["Open", "Close"]].isna().any().any() or (bt[["Open", "Close"]] <= 0).any().any():
+        raise ValueError("行情中存在无效价格，请检查数据源。")
 
-    bt = bt[
-        bt["Date"] >= start_date
-    ].copy()
+    bt["Signal"] = (bt["MA6"] > bt["MA16"]).astype(int)
+    bt["TargetPosition"] = bt["Signal"].shift(1).fillna(0).astype(int)
 
-    if bt.empty:
-        raise ValueError("回测区间没有可用数据。")
-
-    # -----------------------------------------
-    # 信号
-    # MA6 > MA16 = 持仓信号
-    # MA6 <= MA16 = 空仓信号
-    # -----------------------------------------
-    bt["Signal"] = (
-        bt["MA6"] > bt["MA16"]
-    ).astype(int)
-
-    # 非常重要：
-    # 今天收盘确认的信号，
-    # 下一交易日开盘才执行。
-    bt["TargetPosition"] = (
-        bt["Signal"]
-        .shift(1)
-        .fillna(0)
-        .astype(int)
-    )
-
-    # 初始资金归一化为 1
-    cash = 1.0
-    shares = 0.0
-
-    equity_curve = []
-    position_curve = []
-
-    trade_log = []
-
+    cash = float(initial_capital)
+    shares = 0
     entry_date = None
     entry_price = None
-    entry_capital = None
+    entry_cost = 0.0
+    equity_curve, position_curve, trade_log = [], [], []
 
     for _, row in bt.iterrows():
-
         current_date = row["Date"]
-
         open_price = float(row["Open"])
         close_price = float(row["Close"])
+        target = int(row["TargetPosition"])
 
-        target_position = int(
-            row["TargetPosition"]
-        )
+        if target == 1 and shares == 0:
+            price = open_price * (1 + slippage_rate)
+            # A股普通股票买入按100股的整数倍，不能借钱买
+            lots = int(cash // (price * 100))
+            while lots > 0:
+                quantity = lots * 100
+                turnover = quantity * price
+                fee = max(min_commission, turnover * commission_rate)
+                if turnover + fee <= cash + 1e-8:
+                    break
+                lots -= 1
+            if lots > 0:
+                cash -= turnover + fee
+                shares = quantity
+                entry_date = current_date
+                entry_price = price
+                entry_cost = turnover + fee
 
-        # =====================================
-        # 买入
-        # =====================================
-        if target_position == 1 and shares == 0:
-
-            # 模拟买入滑点
-            execution_price = (
-                open_price
-                * (1 + slippage_rate)
-            )
-
-            entry_capital = cash
-
-            # 买入时扣佣金
-            shares = (
-                cash
-                * (1 - commission_rate)
-                / execution_price
-            )
-
-            cash = 0.0
-
-            entry_date = current_date
-            entry_price = execution_price
-
-        # =====================================
-        # 卖出
-        # =====================================
-        elif target_position == 0 and shares > 0:
-
-            # 模拟卖出滑点
-            execution_price = (
-                open_price
-                * (1 - slippage_rate)
-            )
-
-            gross_cash = (
-                shares
-                * execution_price
-            )
-
-            # 卖出扣：
-            # 佣金 + 印花税
-            cash = (
-                gross_cash
-                * (
-                    1
-                    - commission_rate
-                    - stamp_duty_rate
-                )
-            )
-
-            trade_return = (
-                cash / entry_capital
-                - 1
-            )
-
-            holding_days = (
-                pd.to_datetime(current_date)
-                - pd.to_datetime(entry_date)
-            ).days
-
-            trade_log.append(
-                {
-                    "买入日期": entry_date,
-                    "卖出日期": current_date,
-                    "买入价": entry_price,
-                    "卖出价": execution_price,
-                    "持有天数": holding_days,
-                    "单笔收益率": trade_return
-                }
-            )
-
-            shares = 0.0
+        elif target == 0 and shares > 0:
+            price = open_price * (1 - slippage_rate)
+            turnover = shares * price
+            fee = max(min_commission, turnover * commission_rate)
+            tax = turnover * stamp_duty_rate
+            proceeds = turnover - fee - tax
+            cash += proceeds
+            trade_log.append({
+                "买入日期": entry_date,
+                "卖出日期": current_date,
+                "买入价": entry_price,
+                "卖出价": price,
+                "持有天数": (pd.Timestamp(current_date) - pd.Timestamp(entry_date)).days,
+                "单笔收益率": proceeds / entry_cost - 1
+            })
+            shares = 0
             entry_date = None
             entry_price = None
-            entry_capital = None
+            entry_cost = 0.0
 
-        # =====================================
-        # 每日收盘资产
-        # =====================================
-        equity = (
-            cash
-            + shares * close_price
-        )
-
-        equity_curve.append(equity)
-
-        position_curve.append(
-            1 if shares > 0 else 0
-        )
+        equity_curve.append(cash + shares * close_price)
+        position_curve.append(1 if shares > 0 else 0)
 
     bt["StrategyEquity"] = equity_curve
     bt["Position"] = position_curve
 
-    # =========================================
-    # 买入并持有基准
-    # =========================================
-    first_open = float(
-        bt["Open"].iloc[0]
-    )
-
-    benchmark_entry_price = (
-        first_open
-        * (1 + slippage_rate)
-    )
-
-    benchmark_shares = (
-        (1 - commission_rate)
-        / benchmark_entry_price
-    )
-
-    bt["BuyHoldEquity"] = (
-        benchmark_shares
-        * bt["Close"]
-    )
-
-    # =========================================
-    # 回测指标
-    # =========================================
-    strategy_return = (
-        float(
-            bt["StrategyEquity"].iloc[-1]
-        )
-        - 1
-    )
-
-    benchmark_return = (
-        float(
-            bt["BuyHoldEquity"].iloc[-1]
-        )
-        - 1
-    )
-
-    cagr = calculate_cagr(
-        bt["StrategyEquity"],
-        bt["Date"]
-    )
-
-    max_drawdown = calculate_max_drawdown(
-        bt["StrategyEquity"]
-    )
-
-    completed_trades = len(trade_log)
-
-    if completed_trades > 0:
-        winning_trades = sum(
-            trade["单笔收益率"] > 0
-            for trade in trade_log
-        )
-
-        win_rate = (
-            winning_trades
-            / completed_trades
-        )
-
+    # 同等本金、100股整手的买入并持有基准；持有至期末未扣卖出税费
+    benchmark_price = float(bt["Open"].iloc[0]) * (1 + slippage_rate)
+    benchmark_lots = int(initial_capital // (benchmark_price * 100))
+    while benchmark_lots > 0:
+        benchmark_qty = benchmark_lots * 100
+        gross = benchmark_qty * benchmark_price
+        benchmark_fee = max(min_commission, gross * commission_rate)
+        if gross + benchmark_fee <= initial_capital + 1e-8:
+            break
+        benchmark_lots -= 1
+    if benchmark_lots > 0:
+        benchmark_cash = initial_capital - gross - benchmark_fee
     else:
-        win_rate = 0.0
+        benchmark_qty = 0
+        benchmark_cash = float(initial_capital)
+    bt["BuyHoldEquity"] = benchmark_cash + benchmark_qty * bt["Close"]
 
-    # 当前持仓
-    current_position = (
-        "持仓"
-        if shares > 0
-        else "空仓"
-    )
-
-    trade_df = pd.DataFrame(
-        trade_log
-    )
-
+    strategy_return = float(bt["StrategyEquity"].iloc[-1]) / initial_capital - 1
+    benchmark_return = float(bt["BuyHoldEquity"].iloc[-1]) / initial_capital - 1
+    # 用回测窗口起点的本金作为年化起点
+    days = (pd.Timestamp(bt["Date"].iloc[-1]) - pd.Timestamp(bt["Date"].iloc[0])).days
+    final_equity = float(bt["StrategyEquity"].iloc[-1])
+    cagr = (final_equity / initial_capital) ** (365.25 / days) - 1 if days > 0 and final_equity > 0 else 0.0
+    # 将初始本金纳入回撤峰值，避免首日亏损被忽略
+    equity_series = pd.concat([pd.Series([initial_capital]), bt["StrategyEquity"]], ignore_index=True)
+    max_drawdown = calculate_max_drawdown(equity_series)
+    completed_trades = len(trade_log)
+    win_rate = sum(t["单笔收益率"] > 0 for t in trade_log) / completed_trades if completed_trades else 0.0
+    if min(bt["StrategyEquity"].min(), bt["BuyHoldEquity"].min()) < -1e-6:
+        raise ValueError("发现负资产，回测已停止，请检查交易逻辑。")
     return {
-        "data": bt,
-        "trade_log": trade_df,
-        "strategy_return": strategy_return,
-        "benchmark_return": benchmark_return,
-        "cagr": cagr,
-        "max_drawdown": max_drawdown,
-        "completed_trades": completed_trades,
-        "win_rate": win_rate,
-        "current_position": current_position
+        "data": bt, "trade_log": pd.DataFrame(trade_log),
+        "strategy_return": strategy_return, "benchmark_return": benchmark_return,
+        "cagr": cagr, "max_drawdown": max_drawdown,
+        "completed_trades": completed_trades, "win_rate": win_rate,
+        "current_position": "持仓" if shares > 0 else "空仓"
     }
 
 
@@ -349,16 +224,15 @@ with st.sidebar:
         format_func=lambda x: f"{x} 年"
     )
 
+    initial_capital = st.number_input(
+        "初始资金（元）", min_value=10000, max_value=10000000,
+        value=100000, step=10000
+    )
+
     commission_bp = st.number_input(
         "佣金（单边，bp）",
-        min_value=10000,
-        max_value=100000,
-        value=100000,
-        step=10000,
-        help=(
-            "2.5 bp = 0.025%。"
-            "不同券商账户可能不同。"
-        )
+        min_value=0.0, max_value=100.0, value=2.5, step=0.5,
+        help="2.5 bp = 0.025%，不是初始资金。"
     )
 
     stamp_duty_pct = st.number_input(
@@ -882,7 +756,8 @@ if st.button(
                 years=backtest_years,
                 commission_rate=commission_rate,
                 stamp_duty_rate=stamp_duty_rate,
-                slippage_rate=slippage_rate
+                slippage_rate=slippage_rate,
+                initial_capital=float(initial_capital)
             )
 
             bt = result["data"]
@@ -955,7 +830,7 @@ if st.button(
                     x=bt["Date"],
                     y=(
                         bt["StrategyEquity"]
-                        * 100
+                        / initial_capital * 100
                     ),
                     mode="lines",
                     name="MA6/MA16 策略"
@@ -967,7 +842,7 @@ if st.button(
                     x=bt["Date"],
                     y=(
                         bt["BuyHoldEquity"]
-                        * 100
+                        / initial_capital * 100
                     ),
                     mode="lines",
                     name="买入并持有"
@@ -976,8 +851,7 @@ if st.button(
 
             equity_fig.update_layout(
                 title=(
-                    "初始资金 = 100 "
-                    "的历史资金曲线"
+                    "初始净值 = 100 的历史资金曲线"
                 ),
                 xaxis_title="日期",
                 yaxis_title="资金净值",
