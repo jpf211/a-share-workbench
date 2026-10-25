@@ -1,7 +1,9 @@
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 st.set_page_config(
     page_title="A股量化工作台",
@@ -10,13 +12,14 @@ st.set_page_config(
 )
 
 st.title("📈 A股量化工作台")
-st.write("输入股票代码，读取真实 A 股历史行情，并显示 K 线与多周期均线。")
+st.write("A股历史行情 · K线 · 六均线 · 成交量")
 
 
+# 股票代码转换
 def convert_a_share_code(code):
     code = code.strip().upper()
 
-    if code.endswith(".SS") or code.endswith(".SZ"):
+    if code.endswith((".SS", ".SZ")):
         return code
 
     if code.startswith(("5", "6", "9")):
@@ -28,6 +31,7 @@ def convert_a_share_code(code):
     return code
 
 
+# 股票输入框
 stock_code = st.text_input(
     "请输入股票代码",
     value="600519",
@@ -59,19 +63,35 @@ if st.button("读取行情"):
 
             df = df.reset_index()
 
-            # 计算均线
-            df["MA6"] = df["Close"].rolling(6).mean()
-            df["MA16"] = df["Close"].rolling(16).mean()
-            df["MA26"] = df["Close"].rolling(26).mean()
-            df["MA46"] = df["Close"].rolling(46).mean()
-            df["MA62"] = df["Close"].rolling(62).mean()
-            df["MA80"] = df["Close"].rolling(80).mean()
+            # 六条均线
+            ma_periods = [6, 16, 26, 46, 62, 80]
 
-            st.subheader(f"📊 {ticker_code} K线图")
+            ma_colors = [
+                "#38BDF8",
+                "#FCA5A5",
+                "#FF5252",
+                "#4ADE80",
+                "#2DD4BF",
+                "#FACC15"
+            ]
 
-            fig = go.Figure()
+            for period in ma_periods:
+                df[f"MA{period}"] = (
+                    df["Close"].rolling(period).mean()
+                )
 
-            # K线
+            st.subheader(f"📊 {ticker_code} K线与成交量")
+
+            # 创建上下两个图表
+            fig = make_subplots(
+                rows=2,
+                cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.04,
+                row_heights=[0.75, 0.25]
+            )
+
+            # 第一层：K线
             fig.add_trace(
                 go.Candlestick(
                     x=df["Date"],
@@ -79,76 +99,89 @@ if st.button("读取行情"):
                     high=df["High"],
                     low=df["Low"],
                     close=df["Close"],
-                    name="K Line"
-                )
+                    name="K Line",
+                    increasing_line_color="#EF4444",
+                    decreasing_line_color="#22C55E"
+                ),
+                row=1,
+                col=1
             )
 
-            # MA6
+            # 第二层：六条均线
+            for period, color in zip(ma_periods, ma_colors):
+                fig.add_trace(
+                    go.Scatter(
+                        x=df["Date"],
+                        y=df[f"MA{period}"],
+                        mode="lines",
+                        name=f"MA{period}",
+                        line=dict(
+                            color=color,
+                            width=1.5
+                        )
+                    ),
+                    row=1,
+                    col=1
+                )
+
+            # 第三层：成交量柱状图
+            volume_colors = [
+                "#EF4444" if close >= open_price
+                else "#22C55E"
+                for close, open_price in zip(
+                    df["Close"],
+                    df["Open"]
+                )
+            ]
+
             fig.add_trace(
-                go.Scatter(
+                go.Bar(
                     x=df["Date"],
-                    y=df["MA6"],
-                    mode="lines",
-                    name="MA6"
-                )
+                    y=df["Volume"],
+                    name="Volume",
+                    marker_color=volume_colors
+                ),
+                row=2,
+                col=1
             )
 
-            # MA16
-            fig.add_trace(
-                go.Scatter(
-                    x=df["Date"],
-                    y=df["MA16"],
-                    mode="lines",
-                    name="MA16"
-                )
-            )
-
-            # MA26
-            fig.add_trace(
-                go.Scatter(
-                    x=df["Date"],
-                    y=df["MA26"],
-                    mode="lines",
-                    name="MA26"
-                )
-            )
-
-            # MA46
-            fig.add_trace(
-                go.Scatter(
-                    x=df["Date"],
-                    y=df["MA46"],
-                    mode="lines",
-                    name="MA46"
-                )
-            )
-
-            # MA62
-            fig.add_trace(
-                go.Scatter(
-                    x=df["Date"],
-                    y=df["MA62"],
-                    mode="lines",
-                    name="MA62"
-                )
-            )
-
-            # MA80
-            fig.add_trace(
-                go.Scatter(
-                    x=df["Date"],
-                    y=df["MA80"],
-                    mode="lines",
-                    name="MA80"
-                )
-            )
-
+            # 图表样式
             fig.update_layout(
-                title=f"{ticker_code} Price Chart",
-                xaxis_title="Date",
-                yaxis_title="Price",
+                title=f"{ticker_code} Price & Volume",
+                height=800,
+                template="plotly_dark",
                 xaxis_rangeslider_visible=False,
-                height=650
+                xaxis2_rangeslider_visible=False,
+                hovermode="x unified",
+                legend=dict(
+                    orientation="h",
+                    y=1.08,
+                    x=0
+                ),
+                margin=dict(
+                    l=40,
+                    r=30,
+                    t=100,
+                    b=40
+                )
+            )
+
+            fig.update_yaxes(
+                title_text="Price",
+                row=1,
+                col=1
+            )
+
+            fig.update_yaxes(
+                title_text="Volume",
+                row=2,
+                col=1
+            )
+
+            fig.update_xaxes(
+                title_text="Date",
+                row=2,
+                col=1
             )
 
             st.plotly_chart(
@@ -156,7 +189,8 @@ if st.button("读取行情"):
                 use_container_width=True
             )
 
-            st.subheader("最近 30 个交易日数据")
+            # 历史行情表
+            st.subheader("最近30个交易日数据")
 
             show_columns = [
                 "Date",
