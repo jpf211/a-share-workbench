@@ -122,7 +122,85 @@ if st.button("读取行情"):
             for period in ma_periods:
                 df[f"MA{period}"] = (
                     df["Close"].rolling(period).mean()
-                )
+                ) 
+            # ===== V4 六均线智能分析 =====
+
+            st.subheader("🧠 六均线趋势分析")
+
+            latest = df.iloc[-1]
+            previous = df.iloc[-2]
+
+            ma_names = [
+                "MA6", "MA16", "MA26",
+                "MA46", "MA62", "MA80"
+            ]
+
+            ma_values = [
+                latest[name] for name in ma_names
+            ]
+
+            # 判断六均线排列
+            if any(pd.isna(v) for v in ma_values):
+                trend = "数据不足"
+                description = "历史数据不足80个交易日"
+
+            elif all(
+                ma_values[i] > ma_values[i + 1]
+                for i in range(5)
+            ):
+                trend = "多头排列"
+                description = "短期均线依次位于长期均线上方"
+
+            elif all(
+                ma_values[i] < ma_values[i + 1]
+                for i in range(5)
+            ):
+                trend = "空头排列"
+                description = "短期均线依次位于长期均线下方"
+
+            else:
+                trend = "混合排列"
+                description = "六条均线尚未形成完整多头或空头排列"
+
+            st.metric(
+                label="当前六均线排列",
+                value=trend
+            )
+
+            st.write(description)
+
+            # MA6 与 MA16 交叉检测
+            st.subheader("🔍 MA6 / MA16 交叉信号")
+
+            current_ma6 = latest["MA6"]
+            current_ma16 = latest["MA16"]
+            previous_ma6 = previous["MA6"]
+            previous_ma16 = previous["MA16"]
+
+            if any(pd.isna(v) for v in [
+                current_ma6, current_ma16,
+                previous_ma6, previous_ma16
+            ]):
+                st.info("数据不足，无法判断交叉")
+
+            elif (
+                previous_ma6 <= previous_ma16
+                and current_ma6 > current_ma16
+            ):
+                st.success("出现金叉：MA6 向上穿越 MA16")
+
+            elif (
+                previous_ma6 >= previous_ma16
+                and current_ma6 < current_ma16
+            ):
+                st.warning("出现死叉：MA6 向下穿越 MA16")
+
+            else:
+                st.info("最新交易日没有发生 MA6 / MA16 交叉")
+
+            st.caption(
+                "以上仅为历史行情技术指标，不构成投资建议。"
+            )
 
             st.subheader(f"📈 {ticker_code} K线与成交量")
 
